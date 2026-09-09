@@ -468,7 +468,7 @@ fn schema_has_type(schema: &Value, expected: &str) -> bool {
         }
     }
 
-    ["anyOf", "oneOf"].iter().any(|key| {
+    ["anyOf", "oneOf", "allOf"].iter().any(|key| {
         schema
             .get(key)
             .and_then(Value::as_array)
@@ -605,6 +605,18 @@ mod tests {
             serde_json::json!({"type": ["object", "array", "string"]}),
             serde_json::json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
             serde_json::json!({"oneOf": [{"type": "null"}, {"type": "string"}]}),
+            serde_json::json!({"allOf": [{"type": "string"}]}),
+            serde_json::json!({"allOf": [{"minLength": 1}, {"type": "string"}]}),
+            serde_json::json!({"allOf": [
+                {"anyOf": [
+                    {"type": "null"},
+                    {"oneOf": [{"type": "array"}, {"type": "string"}]}
+                ]},
+                {"minLength": 1}
+            ]}),
+            serde_json::json!({"oneOf": [
+                {"type": "null"}, {"allOf": [{"type": "string"}, {"minLength": 1}]}
+            ]}),
             serde_json::json!({"anyOf": [
                 {"type": "object"},
                 {"oneOf": [{"type": "array"}, {"type": ["null", "string"]}]}
@@ -620,6 +632,10 @@ mod tests {
                         "array_text": param_schema,
                         "quoted_text": param_schema,
                         "payload": {"type": "object"},
+                        "composed_payload": {"allOf": [
+                            {"type": "object"},
+                            {"properties": {"key": {"type": "string"}}}
+                        ]},
                         "untyped": {}
                     }
                 })),
@@ -631,6 +647,7 @@ mod tests {
                 "<arg_key>array_text</arg_key><arg_value>[1, 2, 3]</arg_value>",
                 "<arg_key>quoted_text</arg_key><arg_value>\"quoted\"</arg_value>",
                 "<arg_key>payload</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
+                "<arg_key>composed_payload</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
                 "<arg_key>untyped</arg_key><arg_value>[1, 2, 3]</arg_value>",
                 "</tool_call>"
             );
@@ -647,6 +664,10 @@ mod tests {
             assert_eq!(args["array_text"], Value::String("[1, 2, 3]".to_string()));
             assert_eq!(args["quoted_text"], Value::String("\"quoted\"".to_string()));
             assert_eq!(args["payload"], serde_json::json!({"key": "value"}));
+            assert_eq!(
+                args["composed_payload"],
+                serde_json::json!({"key": "value"})
+            );
             assert_eq!(args["untyped"], serde_json::json!([1, 2, 3]));
         }
     }
