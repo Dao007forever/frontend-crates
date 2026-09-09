@@ -1091,7 +1091,6 @@ mod tests {
 
     #[test]
     fn test_arguments_serialized_in_source_order() {
-        // Clients rely on the key order the model emitted; a HashMap scrambled it.
         let config = get_test_config();
         let message = concat!(
             "<tool_call>create_ticket",
