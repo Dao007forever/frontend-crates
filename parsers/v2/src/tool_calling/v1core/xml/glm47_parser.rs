@@ -448,7 +448,15 @@ fn get_param_schema_type<'a>(
     let schema = tool.parameters.as_ref()?;
     let props = schema.get("properties")?;
     let param = props.get(param_name)?;
-    param.get("type")?.as_str()
+    let schema_type = param.get("type")?;
+    schema_type.as_str().or_else(|| {
+        // Prefer string in unions because JSON-looking text is ambiguous.
+        schema_type
+            .as_array()?
+            .iter()
+            .filter_map(Value::as_str)
+            .find(|ty| *ty == "string")
+    })
 }
 
 /// Parse a single GLM-4.7 tool call block
@@ -566,47 +574,53 @@ mod tests {
         Glm47ParserConfig::default()
     }
 
-    #[test] // helper
+    #[test]
     fn test_string_schema_keeps_json_looking_values_verbatim() {
-        let config = get_test_config();
-        let tools = vec![ToolDefinition {
-            name: "save_note".to_string(),
-            parameters: Some(serde_json::json!({
-                "type": "object",
-                "properties": {
-                    "object_text": {"type": "string"},
-                    "array_text": {"type": "string"},
-                    "quoted_text": {"type": "string"},
-                    "payload": {"type": "object"},
-                    "untyped": {}
-                }
-            })),
-        }];
+        for schema_type in [
+            serde_json::json!("string"),
+            serde_json::json!(["string"]),
+            serde_json::json!(["string", "null"]),
+            serde_json::json!(["null", "string"]),
+            serde_json::json!(["object", "array", "string"]),
+        ] {
+            let config = get_test_config();
+            let tools = vec![ToolDefinition {
+                name: "save_note".to_string(),
+                parameters: Some(serde_json::json!({
+                    "type": "object",
+                    "properties": {
+                        "object_text": {"type": schema_type},
+                        "array_text": {"type": schema_type},
+                        "quoted_text": {"type": schema_type},
+                        "payload": {"type": "object"},
+                        "untyped": {}
+                    }
+                })),
+            }];
 
-        let message = concat!(
-            "<tool_call>save_note",
-            "<arg_key>object_text</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
-            "<arg_key>array_text</arg_key><arg_value>[1, 2, 3]</arg_value>",
-            "<arg_key>quoted_text</arg_key><arg_value>\"quoted\"</arg_value>",
-            "<arg_key>payload</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
-            "<arg_key>untyped</arg_key><arg_value>[1, 2, 3]</arg_value>",
-            "</tool_call>"
-        );
+            let message = concat!(
+                "<tool_call>save_note",
+                "<arg_key>object_text</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
+                "<arg_key>array_text</arg_key><arg_value>[1, 2, 3]</arg_value>",
+                "<arg_key>quoted_text</arg_key><arg_value>\"quoted\"</arg_value>",
+                "<arg_key>payload</arg_key><arg_value>{\"key\": \"value\"}</arg_value>",
+                "<arg_key>untyped</arg_key><arg_value>[1, 2, 3]</arg_value>",
+                "</tool_call>"
+            );
 
-        let (calls, _) = try_tool_call_parse_glm47(message, &config, Some(&tools)).unwrap();
-        assert_eq!(calls.len(), 1);
-        let args: HashMap<String, Value> =
-            serde_json::from_str(&calls[0].function.arguments).unwrap();
+            let (calls, _) = try_tool_call_parse_glm47(message, &config, Some(&tools)).unwrap();
+            assert_eq!(calls.len(), 1);
+            let args: HashMap<String, Value> =
+                serde_json::from_str(&calls[0].function.arguments).unwrap();
 
-        // `string` parameters are delivered verbatim even when they look like JSON.
-        assert_eq!(
-            args["object_text"],
-            Value::String("{\"key\": \"value\"}".to_string())
-        );
-        assert_eq!(args["array_text"], Value::String("[1, 2, 3]".to_string()));
-        assert_eq!(args["quoted_text"], Value::String("\"quoted\"".to_string()));
-        // Other schema types and unschematized values keep the eager JSON parse.
-        assert_eq!(args["payload"], serde_json::json!({"key": "value"}));
-        assert_eq!(args["untyped"], serde_json::json!([1, 2, 3]));
+            assert_eq!(
+                args["object_text"],
+                Value::String("{\"key\": \"value\"}".to_string())
+            );
+            assert_eq!(args["array_text"], Value::String("[1, 2, 3]".to_string()));
+            assert_eq!(args["quoted_text"], Value::String("\"quoted\"".to_string()));
+            assert_eq!(args["payload"], serde_json::json!({"key": "value"}));
+            assert_eq!(args["untyped"], serde_json::json!([1, 2, 3]));
+        }
     }
 }
