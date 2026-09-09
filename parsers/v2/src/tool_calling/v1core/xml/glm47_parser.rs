@@ -448,14 +448,35 @@ fn get_param_schema_type<'a>(
     let schema = tool.parameters.as_ref()?;
     let props = schema.get("properties")?;
     let param = props.get(param_name)?;
-    let schema_type = param.get("type")?;
-    schema_type.as_str().or_else(|| {
-        // Prefer string in unions because JSON-looking text is ambiguous.
-        schema_type
-            .as_array()?
-            .iter()
-            .filter_map(Value::as_str)
-            .find(|ty| *ty == "string")
+    // Prefer string in unions because JSON-looking text is ambiguous.
+    if schema_has_type(param, "string") {
+        return Some("string");
+    }
+    param.get("type")?.as_str()
+}
+
+fn schema_has_type(schema: &Value, expected: &str) -> bool {
+    if let Some(schema_type) = schema.get("type") {
+        if schema_type.as_str() == Some(expected) {
+            return true;
+        }
+        if schema_type
+            .as_array()
+            .is_some_and(|types| types.iter().any(|ty| ty.as_str() == Some(expected)))
+        {
+            return true;
+        }
+    }
+
+    ["anyOf", "oneOf"].iter().any(|key| {
+        schema
+            .get(key)
+            .and_then(Value::as_array)
+            .is_some_and(|options| {
+                options
+                    .iter()
+                    .any(|option| schema_has_type(option, expected))
+            })
     })
 }
 
@@ -576,12 +597,18 @@ mod tests {
 
     #[test]
     fn test_string_schema_keeps_json_looking_values_verbatim() {
-        for schema_type in [
-            serde_json::json!("string"),
-            serde_json::json!(["string"]),
-            serde_json::json!(["string", "null"]),
-            serde_json::json!(["null", "string"]),
-            serde_json::json!(["object", "array", "string"]),
+        for param_schema in [
+            serde_json::json!({"type": "string"}),
+            serde_json::json!({"type": ["string"]}),
+            serde_json::json!({"type": ["string", "null"]}),
+            serde_json::json!({"type": ["null", "string"]}),
+            serde_json::json!({"type": ["object", "array", "string"]}),
+            serde_json::json!({"anyOf": [{"type": "string"}, {"type": "null"}]}),
+            serde_json::json!({"oneOf": [{"type": "null"}, {"type": "string"}]}),
+            serde_json::json!({"anyOf": [
+                {"type": "object"},
+                {"oneOf": [{"type": "array"}, {"type": ["null", "string"]}]}
+            ]}),
         ] {
             let config = get_test_config();
             let tools = vec![ToolDefinition {
@@ -589,9 +616,9 @@ mod tests {
                 parameters: Some(serde_json::json!({
                     "type": "object",
                     "properties": {
-                        "object_text": {"type": schema_type},
-                        "array_text": {"type": schema_type},
-                        "quoted_text": {"type": schema_type},
+                        "object_text": param_schema,
+                        "array_text": param_schema,
+                        "quoted_text": param_schema,
                         "payload": {"type": "object"},
                         "untyped": {}
                     }
